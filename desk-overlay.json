@@ -1,0 +1,6 @@
+{
+  "predict_sleeve_net": -1.22,
+  "note": "Standing sit figure from Coinbase 2026-09-08. Coinbase must update /workspace/audit/predict/sleeve_net.json after each Predict settle (primary); this overlay is fallback only. soft_cap_util_pct omitted \u2014 never invent. Morpho convert BLOCKED_CONVERT 2026-09-08 \u2014 mute morpho_dry_idle.",
+  "as_of": "2026-09-08",
+  "morpho_convert_blocked": true
+}

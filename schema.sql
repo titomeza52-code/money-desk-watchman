@@ -1,0 +1,54 @@
+-- money-desk-watchman D1 schema
+CREATE TABLE IF NOT EXISTS policy (
+  id INTEGER PRIMARY KEY CHECK (id=1),
+  soft_cap_usd REAL NOT NULL DEFAULT 150,
+  max_open_orders INTEGER NOT NULL DEFAULT 5,
+  stale_order_minutes INTEGER NOT NULL DEFAULT 120,
+  alert_cooldown_minutes INTEGER NOT NULL DEFAULT 60,
+  alerts_enabled INTEGER NOT NULL DEFAULT 1,
+  pulse_stale_minutes INTEGER NOT NULL DEFAULT 45,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS checks (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  ok INTEGER NOT NULL,
+  drift INTEGER NOT NULL,
+  source TEXT NOT NULL,
+  payload_json TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS alerts (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  body TEXT NOT NULL,
+  sent INTEGER NOT NULL,
+  cooldown_until TEXT,
+  dedup_hash TEXT
+);
+
+CREATE TABLE IF NOT EXISTS lessons (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  source TEXT NOT NULL,
+  rule TEXT NOT NULL,
+  evidence TEXT NOT NULL,
+  status TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS artifacts_index (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  ts TEXT NOT NULL,
+  r2_key TEXT,
+  kind TEXT NOT NULL,
+  notes TEXT
+);
+
+CREATE TABLE IF NOT EXISTS state (
+  k TEXT PRIMARY KEY,
+  v TEXT NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS alerts_dedup ON alerts(dedup_hash) WHERE dedup_hash IS NOT NULL;
