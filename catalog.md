@@ -10,7 +10,8 @@
 | jarvis:money-desk-watchman:lessons | notes | LESSONS.md | internal | Phase4 + book-pulse research bake-in | usable |
 | jarvis:money-desk-watchman:disk-mirror | ops-json | /workspace/jarvis-os/_ops/watchman/last.json | internal | post-run verify | updated book-pulse 2026-09-07 |
 | jarvis:money-desk-watchman:parked-open-order-stale | parked | needs READ-ONLY Coinbase key | internal | L3 public-only | parked — stale_watch gap detector only |
-| jarvis:money-desk-watchman:book-pulse | admin-route | POST /admin/book-pulse | internal | Desk/box feeder observe-only | live; R2 pulses/; alerts mark≤118 sleeve≤-4 |
+| jarvis:money-desk-watchman:book-pulse | admin-route | POST /admin/book-pulse | internal | Desk/box feeder observe-only | live; requires as_of; 400 as_of_stale/missing/invalid/future; R2 pulses/; alerts mark≤118 sleeve≤-4 |
+| jarvis:money-desk-watchman:health-wake | health-contract | GET /health | internal | Desk pull 1.6.7 | pulse_stale + wake.needed/reason; no GET side effects |
 | jarvis:money-desk-watchman:fill-receipt | admin-route | POST /admin/fill-receipt | internal | sanitized fills → R2 | live fills/YYYY-MM-DD/ |
 | jarvis:money-desk-watchman:soft-cap-flag | d1-state | soft_cap_flag via util>25 | internal | Coinbase/Usage observe | live /health + /admin/flags |
 | jarvis:money-desk-watchman:feeder | box-script | scripts/push-book-pulse.py | internal | reads jarvis-hud/live.json | usable; dark: predict_sleeve_net, soft_cap_util_pct |

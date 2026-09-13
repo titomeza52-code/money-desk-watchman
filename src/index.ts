@@ -4,6 +4,15 @@
  * Leo / couple-inbox / partner-key paths: DEAD — do not wake chat.
  */
 
+import {
+  PULSE_STALE_MINUTES_DEFAULT,
+  deskFeederWakeContract,
+  evaluatePulseAsOf,
+  evaluatePulseFreshness,
+  type DeskFeederWake,
+  type PulseFreshness,
+} from "./pulse-contract";
+
 export interface Env {
   DB?: D1Database;
   ADMIN_TOKEN: string;
@@ -40,7 +49,7 @@ const PRODUCTS = ["BTC-USD", "ETH-USD"] as const;
 const COINBASE_BASE = "https://api.exchange.coinbase.com";
 const DEFAULT_BOOK_MARK_USD = 130;
 /** Desk feeder dead: last_pulse_ts older than this → pulse_stale (observe-only). */
-const PULSE_STALE_MINUTES = 45;
+const PULSE_STALE_MINUTES = PULSE_STALE_MINUTES_DEFAULT;
 
 async function migrate(env: Env): Promise<void> {
   const db = requireDb(env);
@@ -169,6 +178,25 @@ async function setLastError(db: D1Database, msg: string | null): Promise<void> {
     await stateSet(db, "last_error", "");
   } else {
     await stateSet(db, "last_error", msg.slice(0, 500));
+  }
+}
+
+/** Optional Desk wake — POST only if COINBASE_WAKE_URL set; never HMAC; skip if absent. */
+async function postDeskWake(env: Env, body: Record<string, unknown>): Promise<string> {
+  if (!env.COINBASE_WAKE_URL) return "skipped_no_url";
+  try {
+    const wakeRes = await fetch(env.COINBASE_WAKE_URL, {
+      method: "POST",
+      headers: { "content-type": "application/json", accept: "application/json" },
+      body: JSON.stringify({
+        source: "money-desk-watchman",
+        ...body,
+        note: typeof body.note === "string" ? body.note : "observe-only wake; no HMAC; no orders",
+      }),
+    });
+    return `posted:${wakeRes.status}`;
+  } catch (e) {
+    return `error:${e instanceof Error ? e.message : String(e)}`;
   }
 }
 
@@ -363,16 +391,13 @@ async function runWatch(
 
   // Desk feeder dead: last_pulse_ts set and older than pulse_stale_minutes (no bootstrap false-fire)
   const lastPulseTs = await stateGet(db, "last_pulse_ts");
-  if (lastPulseTs) {
-    const pulseAgeMs = Date.now() - Date.parse(lastPulseTs);
-    const pulseStaleMs = policy.pulse_stale_minutes * 60_000;
-    if (Number.isFinite(pulseAgeMs) && pulseAgeMs > pulseStaleMs) {
-      const ageMin = Number((pulseAgeMs / 60_000).toFixed(1));
-      reasons.push({
-        kind: "pulse_stale",
-        detail: `Desk feeder last_pulse_ts age ${ageMin}m > policy.pulse_stale_minutes=${policy.pulse_stale_minutes} (feeder dead; observe-only)`,
-      });
-    }
+  const pulseFreshness = evaluatePulseFreshness(lastPulseTs, Date.now(), policy.pulse_stale_minutes);
+  if (pulseFreshness.pulse_stale) {
+    const ageMin = pulseFreshness.pulse_age_minutes ?? 0;
+    reasons.push({
+      kind: "pulse_stale",
+      detail: `Desk feeder last_pulse_ts age ${ageMin}m > policy.pulse_stale_minutes=${policy.pulse_stale_minutes} (feeder dead; observe-only)`,
+    });
   }
 
   const mids = midFromTickers(tickers);
@@ -540,6 +565,16 @@ async function runWatch(
       if (alertId != null) {
         await stateSet(db, "alert_cooldown_until", until);
         await stateSet(db, "last_alert_ts", ts);
+        if (reasons.some((r) => r.kind === "pulse_stale")) {
+          await postDeskWake(env, {
+            kind: "pulse_stale",
+            last_pulse_ts: lastPulseTs,
+            pulse_age_minutes: pulseFreshness.pulse_age_minutes,
+            pulse_stale_minutes: policy.pulse_stale_minutes,
+            ts,
+            note: "observe-only wake; feeder dead; POST /admin/book-pulse; no HMAC; no orders",
+          });
+        }
       }
       // Leo bridge DEAD — skip chat wake; alert stored in D1 only
     }
@@ -833,6 +868,8 @@ type BookPulse = {
   soft_cap_util_pct: number | null;
   /** When true, Morpho USD convert is known-blocked — mute morpho_dry_idle alerts. */
   morpho_convert_blocked?: boolean;
+  /** Snapshot time from Desk (ISO-8601); required on POST, stored as last_pulse_ts. */
+  as_of?: string;
 };
 
 function numOrNull(v: unknown): number | null {
@@ -892,7 +929,8 @@ function sanitizeFillReceipt(value: unknown, depth = 0): unknown {
 
 async function ingestBookPulse(
   env: Env,
-  pulse: BookPulse
+  pulse: BookPulse,
+  asOfIso: string
 ): Promise<{
   ok: boolean;
   checkId?: number;
@@ -903,6 +941,7 @@ async function ingestBookPulse(
   r2?: string;
   pulse: BookPulse;
   ts: string;
+  as_of: string;
 }> {
   await migrate(env);
   const db = requireDb(env);
@@ -928,8 +967,9 @@ async function ingestBookPulse(
   } else {
     await stateSet(db, "morpho_convert_blocked", "");
   }
-  await stateSet(db, "last_pulse_ts", ts);
-  await stateSet(db, "last_pulse_json", JSON.stringify(pulse));
+  await stateSet(db, "last_pulse_ts", asOfIso);
+  await stateSet(db, "last_pulse_ingest_ts", ts);
+  await stateSet(db, "last_pulse_json", JSON.stringify({ ...pulse, as_of: asOfIso }));
 
   let softCapFlag = 0;
   const existingFlag = await stateGet(db, "soft_cap_flag");
@@ -941,6 +981,7 @@ async function ingestBookPulse(
 
   const payload = {
     ts,
+    as_of: asOfIso,
     source: "book_pulse",
     ...pulse,
     soft_cap_flag: softCapFlag,
@@ -1108,8 +1149,9 @@ async function ingestBookPulse(
     silenced,
     soft_cap_flag: softCapFlag,
     r2: r2status,
-    pulse,
+    pulse: { ...pulse, as_of: asOfIso },
     ts,
+    as_of: asOfIso,
   };
 }
 
@@ -1504,27 +1546,15 @@ async function ingestPredictClip(
       }
 
       // Optional wake — skip if COINBASE_WAKE_URL absent; never HMAC
-      if (alertId != null && env.COINBASE_WAKE_URL) {
-        try {
-          const wakeRes = await fetch(env.COINBASE_WAKE_URL, {
-            method: "POST",
-            headers: { "content-type": "application/json", accept: "application/json" },
-            body: JSON.stringify({
-              source: "money-desk-watchman",
-              kind: "predict_cash_out",
-              market_id: clip.market_id,
-              side: clip.side,
-              mark_up,
-              ts,
-              note: "observe-only wake; no HMAC; no orders",
-            }),
-          });
-          wake = `posted:${wakeRes.status}`;
-        } catch (e) {
-          wake = `error:${e instanceof Error ? e.message : String(e)}`;
-        }
-      } else if (alertId != null) {
-        wake = "skipped_no_url";
+      if (alertId != null) {
+        wake = await postDeskWake(env, {
+          kind: "predict_cash_out",
+          market_id: clip.market_id,
+          side: clip.side,
+          mark_up,
+          ts,
+          note: "observe-only wake; no HMAC; no orders",
+        });
       }
     }
   }
@@ -1577,6 +1607,13 @@ async function health(env: Env): Promise<Response> {
   let predict_clip_open = false;
   let cash_out_alert_armed = false;
   let predict_mark_up: number | null = null;
+  let pulse_stale = false;
+  let never_pulsed = false;
+  let pulse_stale_minutes: number | null = null;
+  let wake: DeskFeederWake = deskFeederWakeContract(
+    { last_pulse_ts: null, pulse_age_minutes: null, pulse_stale: false, never_pulsed: false },
+    !!env.COINBASE_WAKE_URL
+  );
   try {
     await migrate(env);
     const db = requireDb(env);
@@ -1584,12 +1621,17 @@ async function health(env: Env): Promise<Response> {
     last_check_ts = await stateGet(db, "last_check_ts");
     last_alert_ts = await stateGet(db, "last_alert_ts");
     last_pulse_ts = await stateGet(db, "last_pulse_ts");
-    if (last_pulse_ts) {
-      const ageMs = Date.now() - Date.parse(last_pulse_ts);
-      if (Number.isFinite(ageMs) && ageMs >= 0) {
-        pulse_age_minutes = Number((ageMs / 60_000).toFixed(2));
-      }
-    }
+    const p = await getPolicy(db);
+    pulse_stale_minutes = p.pulse_stale_minutes;
+    const freshness: PulseFreshness = evaluatePulseFreshness(
+      last_pulse_ts,
+      Date.now(),
+      p.pulse_stale_minutes
+    );
+    pulse_age_minutes = freshness.pulse_age_minutes;
+    pulse_stale = freshness.pulse_stale;
+    never_pulsed = freshness.never_pulsed;
+    wake = deskFeederWakeContract(freshness, !!env.COINBASE_WAKE_URL);
     const errRaw = await stateGet(db, "last_error");
     last_error = errRaw && errRaw.length > 0 ? errRaw : null;
     const transientRaw = await stateGet(db, "last_transient_error");
@@ -1612,7 +1654,6 @@ async function health(env: Env): Promise<Response> {
     } catch {
       // leave transient_fetch defaults
     }
-    const p = await getPolicy(db);
     alerts_enabled = p.alerts_enabled === 1;
     const cooldownUntil = await stateGet(db, "alert_cooldown_until");
     const nowIso = new Date().toISOString();
@@ -1673,6 +1714,10 @@ async function health(env: Env): Promise<Response> {
     last_alert_ts,
     last_pulse_ts,
     pulse_age_minutes,
+    pulse_stale,
+    pulse_stale_minutes,
+    never_pulsed,
+    wake,
     book_mark_usd,
     sleeve_net,
     soft_cap_flag,
@@ -1703,7 +1748,7 @@ code{background:#f4f4f4;padding:.1rem .3rem;border-radius:4px}</style></head>
 <h1>money-desk-watchman</h1>
 <p>Cloudflare edge watchman for Money Desk soft-cap observation. <strong>L3: observe only</strong> — no order placement, cancel, or modify. Public Coinbase market data only.</p>
 <ul>
-<li><a href="/health">GET /health</a></li>
+<li><a href="/health">GET /health</a> — Desk pull: pulse_stale + wake contract (POST /admin/book-pulse when needed)</li>
 <li>Cron: every 15m + night-school 10:15 UTC + dreaming Sun 10:00 UTC (0 10 * * SUN)</li>
 <li>Alerts stored in D1 (Leo bridge not used)</li>
 </ul>
@@ -1963,7 +2008,21 @@ export default {
         if (!parsed.ok) {
           return Response.json({ ok: false, error: parsed.error }, { status: 400 });
         }
-        const result = await ingestBookPulse(env, parsed.pulse);
+        await migrate(env);
+        const db = requireDb(env);
+        const policy = await getPolicy(db);
+        const asOfRaw =
+          raw && typeof raw === "object" && !Array.isArray(raw)
+            ? (raw as Record<string, unknown>).as_of
+            : undefined;
+        const asOf = evaluatePulseAsOf(asOfRaw, Date.now(), policy.pulse_stale_minutes);
+        if (!asOf.ok) {
+          return Response.json(
+            { ok: false, error: asOf.error, code: asOf.code },
+            { status: asOf.status }
+          );
+        }
+        const result = await ingestBookPulse(env, parsed.pulse, asOf.asOfIso);
         return Response.json({ ok: true, result });
       } catch (e) {
         return Response.json(
@@ -2033,6 +2092,8 @@ export default {
         const sleeve_net = await stateNum(db, "predict_sleeve_net");
         const last_pulse_ts = await stateGet(db, "last_pulse_ts");
         const p = await getPolicy(db);
+        const freshness = evaluatePulseFreshness(last_pulse_ts, Date.now(), p.pulse_stale_minutes);
+        const wake = deskFeederWakeContract(freshness, !!env.COINBASE_WAKE_URL);
         return Response.json({
           ok: true,
           soft_cap_flag,
@@ -2040,6 +2101,11 @@ export default {
           book_mark_usd,
           sleeve_net,
           last_pulse_ts,
+          pulse_age_minutes: freshness.pulse_age_minutes,
+          pulse_stale: freshness.pulse_stale,
+          pulse_stale_minutes: p.pulse_stale_minutes,
+          never_pulsed: freshness.never_pulsed,
+          wake,
           soft_cap_usd: p.soft_cap_usd,
           alerts_enabled: p.alerts_enabled === 1,
         });

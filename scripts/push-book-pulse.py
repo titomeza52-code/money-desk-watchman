@@ -18,6 +18,7 @@ import os
 import sys
 import urllib.error
 import urllib.request
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -94,6 +95,18 @@ def sleeve_net_from_sot(live_fallback: Any = None) -> float | None:
     return num_or_none(live_fallback)
 
 
+def pulse_as_of(live: dict[str, Any]) -> str:
+    """Snapshot time for Worker as_of reject.
+
+    Only live.json ``as_of`` (explicit book snapshot). Never overlay as_of, never
+    unrelated live ``ts`` fields that can be older than pulse_stale_minutes.
+    """
+    v = live.get("as_of")
+    if isinstance(v, str) and v.strip():
+        return v.strip()
+    return datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+
+
 def build_pulse(live: dict[str, Any]) -> dict[str, Any]:
     """Map available live.json fields; null if missing — never invent numbers."""
     open_orders = live.get("open_orders")
@@ -127,6 +140,7 @@ def build_pulse(live: dict[str, Any]) -> dict[str, Any]:
             live.get("predict_sleeve_net", live.get("sleeve_net"))
         ),
         "soft_cap_util_pct": num_or_none(live.get("soft_cap_util_pct")),
+        "as_of": pulse_as_of(live),
     }
     return pulse
 

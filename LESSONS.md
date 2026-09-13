@@ -278,3 +278,20 @@
 ### Do not retry
 - Do not re-add night-school/dreaming crons without an explicit wealth-filter revisit.
 - Do not set CLOUDFLARE_API_TOKEN while OAuth works; no orders/HMAC; never print secrets.
+
+## 2026-09-13 harden: as_of reject + /health wake contract (1.6.7)
+
+### Spec shipped
+1. **as_of reject** on `POST /admin/book-pulse`: `as_of` is required ISO-8601 snapshot time. 400 codes: `as_of_missing`, `as_of_invalid`, `as_of_future` (beyond 120s skew), `as_of_stale` (age > `pulse_stale_minutes`). Reject does **not** refresh `last_pulse_ts`. Overlay date-only `as_of` (standing sleeve) is not a live book snapshot — feeder never copies it.
+2. **last_pulse_ts = as_of** (snapshot age), plus `last_pulse_ingest_ts` for ingest wall clock. Stale replay can no longer look fresh.
+3. **GET /health wake contract** (no GET side effects): `pulse_stale`, `pulse_stale_minutes`, `never_pulsed`, `wake: { needed, reason, kind: desk_feeder, action: "POST /admin/book-pulse", url_configured }`. `never_pulsed` still does not fire `pulse_stale` alerts (bootstrap). HTTP 200 while D1 ok even if feeder is dead.
+4. First `pulse_stale` alert still optionally POSTs `COINBASE_WAKE_URL` (`kind=pulse_stale`); skip if URL absent. Same helper as predict cash-out. GET /health never wakes.
+5. Feeder `scripts/push-book-pulse.py` always sends `as_of` from live.json `as_of` if present, else UTC now. Never copies overlay standing `as_of`.
+6. Package **1.6.7**. Tests: `npm test` (node:test pulse-contract). Observe-only; no orders/HMAC.
+
+### Do not retry
+- Do not store ingest wall clock as `last_pulse_ts` when Desk sends `as_of`.
+- Do not treat overlay `as_of` (e.g. `2026-09-08`) as the book snapshot.
+- Do not POST wake from GET /health.
+- Do not false-fire `pulse_stale` on bootstrap null `last_pulse_ts`.
+- Do not invent book numbers; no CLOUDFLARE_API_TOKEN while OAuth works; no Leo/couple-inbox wake.
