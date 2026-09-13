@@ -9,7 +9,7 @@ Cloudflare Worker edge watchman for Money Desk soft-cap **observation**.
 - Leo / couple-inbox bridge is **DEAD** — do not wake chat; alerts stay in D1 (+ R2 artifacts).
 
 ## Stack
-- Wrangler Worker (TypeScript): `money-desk-watchman` (v1.6.4 morpho_convert_blocked mute + morpho_dry_idle + feeder sleeve/overlay; transient 429 ≠ stale_watch)
+- Wrangler Worker (TypeScript): `money-desk-watchman` (v1.6.7 as_of reject + /health wake contract + pulse_stale observe)
 - D1: `money-desk-watchman-db` (binding `DB`) — critical flags + checks/alerts
 - R2: `ego-artifacts` (binding `ARTIFACTS`) — structured pulses + fill receipts
 - Crons (UTC): `*/15 * * * *` watch; `15 10 * * *` night-school; `0 10 * * SUN` dreaming (CF Quartz: use SUN not 0)
@@ -19,10 +19,10 @@ Cloudflare Worker edge watchman for Money Desk soft-cap **observation**.
 ## Routes
 | Method | Path | Notes |
 |--------|------|-------|
-| GET | `/health` | Desk pull: + predict_clip_open, cash_out_alert_armed, optional predict_mark_up; book pulse fields; `transient_fetch` / `transient_fetch_products` / `last_transient_error` (no alert) |
+| GET | `/health` | Desk pull / **wake contract**: `pulse_stale`, `pulse_stale_minutes`, `never_pulsed`, `wake: { needed, reason, kind: desk_feeder, action: "POST /admin/book-pulse", url_configured }` (no GET side effects). Also predict clip fields; book pulse fields; `transient_fetch` / `transient_fetch_products` / `last_transient_error` (no alert) |
 | GET | `/` | Landing |
-| GET | `/admin/flags` | x-admin-token — soft_cap_flag + pulse snapshot for Usage/Desk |
-| POST | `/admin/book-pulse` | x-admin-token — Desk/box feeder snapshot (observe-only) |
+| GET | `/admin/flags` | x-admin-token — soft_cap_flag + pulse snapshot + `pulse_stale` / `wake` for Usage/Desk |
+| POST | `/admin/book-pulse` | x-admin-token — Desk/box feeder snapshot; **requires `as_of` ISO-8601**; 400 `as_of_missing` / `as_of_invalid` / `as_of_future` / `as_of_stale` (does not refresh `last_pulse_ts`) |
 | POST | `/admin/predict-clip` | x-admin-token — Predict cash-out observe clip / `{clear:true}` |
 | POST | `/admin/fill-receipt` | x-admin-token — sanitized fill JSON → R2 `fills/YYYY-MM-DD/<id>.json` |
 | POST | `/admin/force-alert` | x-admin-token — synthetic drift; respects kill-switch |
@@ -35,6 +35,7 @@ Cloudflare Worker edge watchman for Money Desk soft-cap **observation**.
 ## Book pulse schema
 ```json
 {
+  "as_of": "2026-09-13T00:20:00.000Z",
   "book_mark_usd": 132.99,
   "wreck_pause_usd": 113,
   "wreck_kill_usd": 92,
@@ -45,7 +46,9 @@ Cloudflare Worker edge watchman for Money Desk soft-cap **observation**.
   "soft_cap_util_pct": null
 }
 ```
-- Nulls accepted for missing fields (do not invent numbers).
+- **`as_of` required** — ISO-8601 snapshot time of the live book (not overlay standing date). Stored as D1 `last_pulse_ts` (age is snapshot age, not ingest wall clock).
+- Reject **400** (no state write of a fresh pulse): missing/blank → `as_of_missing`; non-string/unparseable → `as_of_invalid`; future beyond 120s skew → `as_of_future`; older than `policy.pulse_stale_minutes` (default 45) → `as_of_stale`.
+- Nulls accepted for missing numeric fields (do not invent numbers).
 - Defaults: `wreck_pause_usd=113`, `wreck_kill_usd=92` when omitted.
 - Stores latest in D1 `state` + `checks` row `source=book_pulse`.
 - When ARTIFACTS bound: R2 `pulses/YYYY-MM-DD/HHMM.json`.
@@ -87,9 +90,16 @@ python3 scripts/push-book-pulse.py
 
 ## Behavior (tape watch)
 1. Fetch Coinbase Exchange public tickers for BTC-USD + ETH-USD.
-2. Drift/alert if hard fetch fail, mid move > DRIFT_PCT, `stale_watch`, or admin force. HTTP 429/5xx: check + `last_transient_error` only (no alert; `last_error` stays clean). Partial OK still refreshes `last_ok_check_ts` so sticky 429s do not fire `stale_watch`.
-3. Always insert checks. Alerts only if `alerts_enabled=1` and fingerprint not within cooldown.
+2. Drift/alert if hard fetch fail, mid move > DRIFT_PCT, `stale_watch`, `pulse_stale` (last_pulse_ts set and older than `pulse_stale_minutes`; bootstrap null skips), or admin force. HTTP 429/5xx: check + `last_transient_error` only (no alert; `last_error` stays clean). Partial OK still refreshes `last_ok_check_ts` so sticky 429s do not fire `stale_watch`.
+3. Always insert checks. Alerts only if `alerts_enabled=1` and fingerprint not within cooldown. First `pulse_stale` alert also POSTs `COINBASE_WAKE_URL` when set (`kind=pulse_stale`); GET `/health` never wakes.
 4. Night-school / Dreaming unchanged (D1 lessons SoT; R2 optional md).
+
+## /health wake contract (Desk pull)
+Desk polls GET `/health` (no side effects). When `wake.needed` is true, Desk must `POST /admin/book-pulse` with a fresh `as_of`.
+- `wake.reason=never_pulsed` — bootstrap; `pulse_stale` stays false (no false-fire).
+- `wake.reason=pulse_stale` — `last_pulse_ts` is set and older than `pulse_stale_minutes`.
+- `wake.url_configured` — whether optional `COINBASE_WAKE_URL` is set (URL is never returned).
+- HTTP 200 while D1 is ok even if pulse is stale; `ok` tracks bindings, not feeder liveness.
 
 ## Parked
 - Analytics Engine time-series, Vectorize, Pages dashboard.
