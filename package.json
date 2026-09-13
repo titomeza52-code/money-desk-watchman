@@ -2,6 +2,7 @@
   "name": "money-desk-watchman",
   "version": "1.6.7",
   "private": true,
+  "type": "module",
   "scripts": {
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
