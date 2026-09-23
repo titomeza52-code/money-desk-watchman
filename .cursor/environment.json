@@ -1,0 +1,12 @@
+{
+  "name": "money-desk-watchman",
+  "install": "npm ci",
+  "start": "if [ ! -f .dev.vars ]; then umask 077 && printf 'ADMIN_TOKEN=%s\\n' \"$(head -c 24 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c 32)\" > .dev.vars; fi",
+  "terminals": [
+    {
+      "name": "wrangler-dev",
+      "command": "npx wrangler dev --port 8787 --ip 127.0.0.1"
+    }
+  ],
+  "ports": [8787]
+}
