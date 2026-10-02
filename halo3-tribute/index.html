@@ -1,0 +1,82 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>RINGFALL — Halo 3 Tribute</title>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Orbitron:wght@500;700;800&family=Rajdhani:wght@500;600;700&display=swap"
+      rel="stylesheet"
+    />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="game-canvas"></canvas>
+
+      <div id="hud" class="hidden">
+        <div id="crosshair"></div>
+        <div id="motion-tracker">
+          <canvas id="radar" width="140" height="140"></canvas>
+        </div>
+        <div id="vitals">
+          <div class="vital-label">SHIELDS</div>
+          <div id="shield-bar"><div id="shield-fill"></div></div>
+          <div class="vital-label">INTEGRITY</div>
+          <div id="health-bar"><div id="health-fill"></div></div>
+        </div>
+        <div id="weapon-panel">
+          <div id="weapon-name">BATTLE RIFLE</div>
+          <div id="ammo-row">
+            <span id="ammo-mag">36</span>
+            <span class="ammo-sep">/</span>
+            <span id="ammo-reserve">216</span>
+          </div>
+          <div id="grenade-row">FRAG <span id="grenades">2</span></div>
+        </div>
+        <div id="objective">CLEAR THE LZ · WAVE <span id="wave">1</span></div>
+        <div id="kill-feed"></div>
+        <div id="damage-vignette"></div>
+      </div>
+
+      <div id="title-screen">
+        <div class="title-bg"></div>
+        <div class="title-content">
+          <p class="eyebrow">UNOFFICIAL FAN TRIBUTE</p>
+          <h1>RINGFALL</h1>
+          <p class="tagline">A browser-playable Halo 3–inspired arena skirmish.</p>
+          <button id="start-btn" type="button">DEPLOY</button>
+          <div class="controls-hint">
+            <span>WASD move</span>
+            <span>Mouse aim</span>
+            <span>LMB fire</span>
+            <span>R reload</span>
+            <span>1–2 weapons</span>
+            <span>G grenade</span>
+            <span>F melee</span>
+            <span>Space jump</span>
+            <span>Shift sprint</span>
+          </div>
+          <p class="disclaimer">
+            Not affiliated with Microsoft, Bungie, or 343 Industries. Original code and art —
+            inspired by the feel of Halo 3 multiplayer.
+          </p>
+        </div>
+      </div>
+
+      <div id="pause-screen" class="overlay hidden">
+        <h2>PAUSED</h2>
+        <p>Press Esc to resume · Click canvas if pointer unlocks</p>
+      </div>
+
+      <div id="end-screen" class="overlay hidden">
+        <h2 id="end-title">VICTORY</h2>
+        <p id="end-detail">The landing zone is secure.</p>
+        <button id="restart-btn" type="button">REDEPLOY</button>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -7,7 +7,10 @@
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
     "test": "node --experimental-strip-types --test src/pulse-contract.test.ts",
-    "cf-typegen": "wrangler types"
+    "cf-typegen": "wrangler types",
+    "halo:dev": "npm --prefix halo3-tribute run dev",
+    "halo:build": "npm --prefix halo3-tribute run build",
+    "halo:preview": "npm --prefix halo3-tribute run preview"
   },
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20260907.1",
