@@ -409,7 +409,13 @@ export class Game {
     requestAnimationFrame(this.animate);
     const dt = Math.min(this.clock.getDelta(), 0.05);
 
-    if (this.running && !this.paused && this.player.alive) {
+    if (this.running && !this.player.alive) {
+      this.endGame(false);
+      this.renderer.render(this.scene, this.camera);
+      return;
+    }
+
+    if (this.running && !this.paused) {
       if (this.toSpawn > 0) {
         this.spawnTimer -= dt;
         if (this.spawnTimer <= 0) {
@@ -457,16 +463,6 @@ export class Game {
         } else {
           this.prepareWave(this.wave + 1);
         }
-      } else if (
-        this.toSpawn <= 0 &&
-        this.enemies.length === 0 &&
-        this.wave === 1
-      ) {
-        // waiting first spawn
-      }
-
-      if (!this.player.alive) {
-        this.endGame(false);
       }
 
       this.updateHud();
