@@ -60,7 +60,6 @@ export class Game {
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.setSize(window.innerWidth, window.innerHeight);
     this.renderer.shadowMap.enabled = true;
-    this.renderer.shadowMap.type = THREE.PCFSoftShadowMap;
 
     this.scene = new THREE.Scene();
     this.camera = new THREE.PerspectiveCamera(75, window.innerWidth / window.innerHeight, 0.1, 200);
@@ -116,14 +115,15 @@ export class Game {
 
   prepareWave(n: number) {
     this.wave = n;
-    this.toSpawn = 4 + n * 2;
-    this.spawnTimer = 0.8;
+    this.toSpawn = 2 + n;
+    this.spawnTimer = 1.4;
     this.hudEls.wave.textContent = String(n);
     this.pushFeed(`Wave ${n} inbound`);
   }
 
   start() {
     this.audio.ensure();
+    this.input.mouseDown = false;
     this.hudEls.title.classList.add("hidden");
     this.hudEls.end.classList.add("hidden");
     this.hudEls.pause.classList.add("hidden");
@@ -131,7 +131,7 @@ export class Game {
     this.resetWorld();
     this.running = true;
     this.paused = false;
-    this.clock.start();
+    this.clock = new THREE.Clock();
     this.input.requestLock();
   }
 
@@ -148,12 +148,17 @@ export class Game {
   }
 
   private spawnPoint(): THREE.Vector3 {
-    const angle = Math.random() * Math.PI * 2;
-    const dist = 28 + Math.random() * 12;
-    const x = Math.cos(angle) * dist;
-    const z = Math.sin(angle) * dist;
-    const y = this.world.getGroundHeight(x, z) + 1.2;
-    return new THREE.Vector3(x, y, z);
+    const player = this.camera.position;
+    for (let attempt = 0; attempt < 12; attempt++) {
+      const angle = Math.random() * Math.PI * 2;
+      const dist = 32 + Math.random() * 10;
+      const x = Math.cos(angle) * dist;
+      const z = Math.sin(angle) * dist;
+      const y = this.world.getGroundHeight(x, z);
+      const p = new THREE.Vector3(x, y, z);
+      if (p.distanceTo(player) >= 24) return p;
+    }
+    return new THREE.Vector3(36, this.world.getGroundHeight(36, 0), 0);
   }
 
   private spawnOne() {
@@ -314,23 +319,22 @@ export class Game {
       }
 
       e.fireCooldown -= dt;
-      if (e.fireCooldown <= 0 && dist < 38 && dist > 2.5) {
-        e.fireCooldown = e.type === "elite" ? 0.7 : 1.15;
+      if (e.fireCooldown <= 0 && dist < 34 && dist > 3.5) {
+        e.fireCooldown = e.type === "elite" ? 1.35 : 2.0;
         const origin = e.group.position.clone().add(new THREE.Vector3(0, 1.2, 0));
         const dir = playerPos.clone().sub(origin).normalize();
-        // slight inaccuracy
-        dir.x += (Math.random() - 0.5) * 0.08;
-        dir.y += (Math.random() - 0.5) * 0.05;
+        dir.x += (Math.random() - 0.5) * 0.14;
+        dir.y += (Math.random() - 0.5) * 0.1;
         dir.normalize();
         const bolt = spawnProjectile(this.scene, origin, dir, "plasma");
-        bolt.damage = e.type === "elite" ? 16 : 10;
+        bolt.damage = e.type === "elite" ? 12 : 7;
         (bolt.mesh.material as THREE.MeshBasicMaterial).color.set(0x88ff66);
         this.enemyProjectiles.push(bolt);
       }
 
       // Contact damage
-      if (dist < 1.4) {
-        this.player.takeDamage((e.type === "elite" ? 22 : 12) * dt, this.audio);
+      if (dist < 1.35) {
+        this.player.takeDamage((e.type === "elite" ? 14 : 8) * dt, this.audio);
       }
     }
   }
@@ -409,7 +413,7 @@ export class Game {
         if (this.spawnTimer <= 0) {
           this.spawnOne();
           this.toSpawn -= 1;
-          this.spawnTimer = 0.55;
+          this.spawnTimer = 1.1;
         }
       }
 

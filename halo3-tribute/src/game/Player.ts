@@ -33,6 +33,7 @@ export class Player {
   health = 100;
   maxHealth = 100;
   shieldDelay = 0;
+  spawnProtect = 0;
   alive = true;
 
   weapons: WeaponState[] = [
@@ -74,7 +75,12 @@ export class Player {
 
   constructor(camera: THREE.PerspectiveCamera) {
     this.camera = camera;
-    this.camera.position.set(0, 4, 18);
+    // Clear leftover viewmodels from prior lives
+    while (this.camera.children.length) {
+      this.camera.remove(this.camera.children[0]);
+    }
+    this.camera.position.set(0, 5.2, 0);
+    this.spawnProtect = 4;
 
     this.viewmodel = new THREE.Group();
     this.gunMesh = this.buildGun("br");
@@ -136,7 +142,7 @@ export class Player {
   }
 
   takeDamage(amount: number, audio: AudioBus) {
-    if (!this.alive) return;
+    if (!this.alive || this.spawnProtect > 0) return;
     this.shieldDelay = 3.2;
     let remaining = amount;
     if (this.shields > 0) {
@@ -165,6 +171,7 @@ export class Player {
     onMelee: () => void,
   ) {
     if (!this.alive) return;
+    if (this.spawnProtect > 0) this.spawnProtect -= dt;
 
     const { dx, dy } = input.consumeMouseDelta();
     this.yaw -= dx * 0.0022;

@@ -8,8 +8,22 @@ document.getElementById("start-btn")!.addEventListener("click", () => {
   game.start();
 });
 
-document.getElementById("restart-btn")!.addEventListener("click", () => {
-  game.start();
+const redeploy = () => {
+  const end = document.getElementById("end-screen")!;
+  if (!end.classList.contains("hidden")) {
+    game.start();
+  }
+};
+
+document.getElementById("restart-btn")!.addEventListener("pointerdown", (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  redeploy();
+});
+document.getElementById("restart-btn")!.addEventListener("click", (e) => {
+  e.preventDefault();
+  e.stopPropagation();
+  redeploy();
 });
 
 canvas.addEventListener("click", () => {
@@ -21,9 +35,7 @@ canvas.addEventListener("click", () => {
 });
 
 window.addEventListener("keydown", (e) => {
-  if (e.code === "Escape" && game.running && game.paused) {
-    // browser releases pointer lock on Esc; show pause already
+  if (e.code === "Enter" || e.code === "Space") {
+    redeploy();
   }
 });
-
-// Clean unused scaffold files if present — ignore

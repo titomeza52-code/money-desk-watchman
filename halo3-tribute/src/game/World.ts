@@ -3,12 +3,14 @@ import * as THREE from "three";
 const ARENA_HALF = 48;
 
 export function createWorld(scene: THREE.Scene) {
-  scene.background = new THREE.Color(0x87a0b0);
-  scene.fog = new THREE.Fog(0x87a0b0, 40, 120);
+  scene.background = new THREE.Color(0x9eb6c8);
+  scene.fog = new THREE.Fog(0x9eb6c8, 55, 140);
 
-  const hemi = new THREE.HemisphereLight(0xd8e8ff, 0x6b5a3c, 0.85);
+  const hemi = new THREE.HemisphereLight(0xe8f2ff, 0x8a7348, 1.05);
   scene.add(hemi);
-  const sun = new THREE.DirectionalLight(0xfff0d0, 1.15);
+  const sun = new THREE.DirectionalLight(0xfff2dc, 1.35);
+  const fill = new THREE.AmbientLight(0xb0c4b8, 0.35);
+  scene.add(fill);
   sun.position.set(40, 60, 20);
   sun.castShadow = true;
   sun.shadow.mapSize.set(2048, 2048);
@@ -68,14 +70,15 @@ export function createWorld(scene: THREE.Scene) {
 
   // Forerunner-inspired metallic structures
   const forgeMat = new THREE.MeshStandardMaterial({
-    color: 0x2a3f3c,
-    metalness: 0.75,
-    roughness: 0.28,
+    color: 0x3d5c56,
+    metalness: 0.55,
+    roughness: 0.35,
   });
   const accentMat = new THREE.MeshStandardMaterial({
-    color: 0x2ecc9a,
-    emissive: 0x0a4a38,
-    metalness: 0.4,
+    color: 0x3dffb0,
+    emissive: 0x1a6a48,
+    emissiveIntensity: 0.45,
+    metalness: 0.35,
     roughness: 0.4,
   });
 
