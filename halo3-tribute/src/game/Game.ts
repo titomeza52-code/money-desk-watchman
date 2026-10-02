@@ -319,15 +319,17 @@ export class Game {
       }
 
       e.fireCooldown -= dt;
-      if (e.fireCooldown <= 0 && dist < 34 && dist > 3.5) {
-        e.fireCooldown = e.type === "elite" ? 1.35 : 2.0;
+      if (e.fireCooldown <= 0 && dist < 38 && dist > 2.8) {
+        const waveScale = 1 / (1 + (this.wave - 1) * 0.12);
+        e.fireCooldown = (e.type === "elite" ? 1.0 : 1.55) * waveScale;
         const origin = e.group.position.clone().add(new THREE.Vector3(0, 1.2, 0));
         const dir = playerPos.clone().sub(origin).normalize();
-        dir.x += (Math.random() - 0.5) * 0.14;
-        dir.y += (Math.random() - 0.5) * 0.1;
+        const spread = 0.12 - Math.min(0.05, this.wave * 0.008);
+        dir.x += (Math.random() - 0.5) * spread;
+        dir.y += (Math.random() - 0.5) * (spread * 0.7);
         dir.normalize();
         const bolt = spawnProjectile(this.scene, origin, dir, "plasma");
-        bolt.damage = e.type === "elite" ? 12 : 7;
+        bolt.damage = (e.type === "elite" ? 14 : 9) + (this.wave - 1) * 1.5;
         (bolt.mesh.material as THREE.MeshBasicMaterial).color.set(0x88ff66);
         this.enemyProjectiles.push(bolt);
       }
