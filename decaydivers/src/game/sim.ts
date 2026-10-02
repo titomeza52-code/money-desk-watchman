@@ -32,23 +32,29 @@ function tryLoot(m: MissionState) {
     if (b.looted) continue;
     const cx = b.x + b.w / 2;
     const cy = b.y + b.h / 2;
-    if (dist(m.playerX, m.playerY, cx, cy) < Math.max(b.w, b.h) * 0.55) {
+    if (dist(m.playerX, m.playerY, cx, cy) < Math.max(b.w, b.h) * 0.7) {
       b.looted = true;
+      const parts: string[] = [];
       for (const [k, v] of Object.entries(b.loot)) {
-        if (v) addLoot(m.lootBag, k as keyof typeof b.loot, v);
+        if (v) {
+          addLoot(m.lootBag, k as keyof typeof b.loot, v);
+          parts.push(`+${v} ${k}`);
+        }
       }
-      m.message = `LOOTED ${b.kind.toUpperCase()}`;
-      m.messageTimer = 1.6;
-      burst(m, cx, cy, "#d4a017", 14, 90);
+      m.message = `LOOTED ${b.kind.toUpperCase()} — ${parts.join(" · ") || "nothing"}`;
+      m.messageTimer = 2.2;
+      burst(m, cx, cy, "#d4a017", 18, 110);
       return;
     }
   }
+  m.message = "NO LOOT IN RANGE — GET CLOSER";
+  m.messageTimer = 1.1;
 }
 
-function fire(m: MissionState, aimX: number, aimY: number, fromX = m.playerX, fromY = m.playerY, dmg = 18) {
+function fire(m: MissionState, aimX: number, aimY: number, fromX = m.playerX, fromY = m.playerY, dmg = 26) {
   const a = Math.atan2(aimY - fromY, aimX - fromX);
-  const spread = (Math.random() - 0.5) * 0.08;
-  const speed = 620;
+  const spread = (Math.random() - 0.5) * 0.06;
+  const speed = 720;
   m.bullets.push({
     x: fromX + Math.cos(a) * 18,
     y: fromY + Math.sin(a) * 18,
@@ -57,13 +63,13 @@ function fire(m: MissionState, aimX: number, aimY: number, fromX = m.playerX, fr
     life: 0.9,
     damage: dmg,
   });
-  burst(m, fromX + Math.cos(a) * 16, fromY + Math.sin(a) * 16, "#c8c0a8", 3, 40);
+  burst(m, fromX + Math.cos(a) * 16, fromY + Math.sin(a) * 16, "#f0e0a0", 5, 55);
 }
 
 function damagePlayer(state: GameState, m: MissionState, amount: number) {
   if (m.invuln > 0 || m.dropTimer > 0) return;
   m.playerHp -= amount;
-  m.invuln = 0.55;
+  m.invuln = 0.7;
   state.shake = Math.max(state.shake, 8);
   burst(m, m.playerX, m.playerY, "#9a3b2a", 8, 70);
   if (m.playerHp <= 0) {
@@ -164,6 +170,7 @@ export function updateMission(state: GameState, dt: number) {
     m.dropTimer -= dt;
     if (m.dropTimer <= 0) {
       m.dropped = true;
+      m.invuln = 3;
       m.message = "BOOTS ON GROUND — LOOT & EXTRACT";
       m.messageTimer = 2.5;
       burst(m, m.playerX, m.playerY, "#d4a017", 28, 160);
@@ -294,18 +301,18 @@ export function updateMission(state: GameState, dt: number) {
     z.y += Math.sin(a) * z.speed * dt;
 
     if (dPlayer < (z.kind === "brute" ? 28 : 22) && m.playerHp > 0) {
-      const dmg = z.kind === "brute" ? 22 : z.kind === "runner" ? 10 : 12;
-      damagePlayer(state, m, dmg * dt * 3.2);
+      const dmg = z.kind === "brute" ? 14 : z.kind === "runner" ? 7 : 8;
+      damagePlayer(state, m, dmg * dt);
     }
 
     // bullet hits
     for (const b of m.bullets) {
-      if (dist(b.x, b.y, z.x, z.y) < (z.kind === "brute" ? 22 : 16)) {
+      if (dist(b.x, b.y, z.x, z.y) < (z.kind === "brute" ? 26 : 20)) {
         z.hp -= b.damage;
         b.life = 0;
         z.aggro = true;
-        z.stun = Math.max(z.stun, 0.05);
-        burst(m, z.x, z.y, "#8b3a2a", 4, 60);
+        z.stun = Math.max(z.stun, 0.08);
+        burst(m, z.x, z.y, "#e8c070", 8, 80);
       }
     }
   }

@@ -146,7 +146,7 @@ function drawOutpost(ctx: CanvasRenderingContext2D, state: GameState, w: number,
   panel(ctx, 340, 110, Math.min(520, w - 380), 280);
   ctx.fillStyle = COLORS.amber;
   ctx.font = `700 18px "Barlow Condensed", sans-serif`;
-  ctx.fillText("SURVIVORS — SELECT SQUAD (1–3)", 356, 138);
+  ctx.fillText("SURVIVORS — SELECT SQUAD (keys 1–9, up to 3)", 356, 138);
 
   o.survivors.forEach((s, i) => {
     const y = 158 + i * 48;
@@ -378,9 +378,11 @@ function drawMission(ctx: CanvasRenderingContext2D, state: GameState, w: number,
   }
 
   // bullets
-  ctx.fillStyle = "#f0e8c8";
   for (const b of m.bullets) {
-    ctx.fillRect(b.x - 2, b.y - 2, 4, 4);
+    ctx.fillStyle = "#f5ecd0";
+    ctx.beginPath();
+    ctx.arc(b.x, b.y, 3.5, 0, Math.PI * 2);
+    ctx.fill();
   }
 
   // particles
@@ -427,7 +429,9 @@ function drawMissionHud(ctx: CanvasRenderingContext2D, state: GameState, w: numb
   ctx.font = `700 18px "Barlow Condensed", sans-serif`;
   ctx.textAlign = "left";
   ctx.fillText(`HP ${Math.ceil(m.playerHp)}`, 20, 34);
-  ctx.fillText(`TIME ${Math.ceil(m.timeLeft)}s`, 120, 34);
+  ctx.fillStyle = m.timeLeft < 30 ? COLORS.danger : COLORS.amber;
+  ctx.fillText(`LEFT ${Math.ceil(m.timeLeft)}s`, 120, 34);
+  ctx.fillStyle = COLORS.amber;
   ctx.fillText(`KILLS ${m.killCount}`, 250, 34);
   const loot = `F${m.lootBag.food ?? 0} A${m.lootBag.ammo ?? 0} M${m.lootBag.medicine ?? 0} T${m.lootBag.materials ?? 0}`;
   ctx.fillText(loot, 360, 34);
