@@ -1,0 +1,47 @@
+:root {
+  --bg: #060a07;
+  --amber: #d4a017;
+  --hud: #b8c4a8;
+  color-scheme: dark;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background: var(--bg);
+}
+
+body {
+  font-family: "Share Tech Mono", monospace;
+  color: var(--hud);
+}
+
+#app {
+  display: grid;
+  place-items: center;
+}
+
+canvas#game {
+  display: block;
+  width: 100vw;
+  height: 100vh;
+  cursor: crosshair;
+  background: var(--bg);
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+}
