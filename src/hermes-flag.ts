@@ -107,8 +107,10 @@ export function buildPulseStaleHermesFlag(input: {
   hard_fetch_fail: boolean;
   transient_only: boolean;
   price_moves: { product: string; last: number; now: number; pct: number; above_threshold: boolean }[];
+  /** D1 alert kind when this watch flag is not pulse_stale. */
+  alert_kind?: string;
 }): HermesFlag {
-  return buildHermesFlag("pulse_stale", "observe-only wake; feeder dead; POST /admin/book-pulse; no HMAC; no orders", {
+  return buildHermesFlag(input.alert_kind || "pulse_stale", "observe-only wake; feeder dead; POST /admin/book-pulse; no HMAC; no orders", {
     ts: input.ts,
     check_id: input.check_id,
     alert_id: input.alert_id,

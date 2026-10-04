@@ -1,9 +1,11 @@
 /**
  * money-desk-watchman — L3 edge watchman (public market data only).
  * NEVER places/cancels/modifies orders. No Coinbase account keys.
- * Leo / couple-inbox / partner-key paths: DEAD — do not wake chat.
+ * Leo / couple-inbox / partner-key paths: DEAD — do not wake those chats.
+ * Discord flag posts mention Hermes only. They are not orders.
  */
 
+import { buildDiscordFlagMessage } from "./discord-flag";
 import {
   buildBookPulseHermesFlag,
   buildPredictCashOutHermesFlag,
@@ -28,6 +30,13 @@ export interface Env {
   ARTIFACTS?: R2Bucket;
   /** Optional Desk wake URL — POST only if set; never HMAC; skip if absent. */
   COINBASE_WAKE_URL?: string;
+  /**
+   * Secret. Discord webhook for the Hermes room. Not committed.
+   * wrangler secret put DISCORD_WEBHOOK_URL
+   */
+  DISCORD_WEBHOOK_URL?: string;
+  /** Optional Hermes bot snowflake so the message is a real mention. Not a token. */
+  HERMES_DISCORD_USER_ID?: string;
 }
 
 function requireDb(env: Env): D1Database {
@@ -187,6 +196,31 @@ async function setLastError(db: D1Database, msg: string | null): Promise<void> {
   }
 }
 
+function wakeEnvelope(body: Record<string, unknown>): Record<string, unknown> {
+  return {
+    source: "money-desk-watchman",
+    ...body,
+    note: typeof body.note === "string" ? body.note : "observe-only wake; no HMAC; no orders",
+  };
+}
+
+function redactUrl(msg: string): string {
+  return msg.replace(/https?:\/\/\S+/gi, "[url]").slice(0, 180);
+}
+
+function isDiscordWebhook(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    return (
+      url.protocol === "https:" &&
+      (url.hostname === "discord.com" || url.hostname === "discordapp.com") &&
+      url.pathname.startsWith("/api/webhooks/")
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Deliver an already-built observe-only flag to Hermes (COINBASE_WAKE_URL).
  * The body is sent as-is. No retry, no response parse, no enrichment.
@@ -198,16 +232,57 @@ async function postDeskWake(env: Env, body: Record<string, unknown>): Promise<st
     const wakeRes = await fetch(env.COINBASE_WAKE_URL, {
       method: "POST",
       headers: { "content-type": "application/json", accept: "application/json" },
-      body: JSON.stringify({
-        source: "money-desk-watchman",
-        ...body,
-        note: typeof body.note === "string" ? body.note : "observe-only wake; no HMAC; no orders",
-      }),
+      body: JSON.stringify(wakeEnvelope(body)),
     });
     return `posted:${wakeRes.status}`;
   } catch (e) {
-    return `error:${e instanceof Error ? e.message : String(e)}`;
+    return `error:${redactUrl(e instanceof Error ? e.message : String(e))}`;
   }
+}
+
+/**
+ * Observe-only Discord post of the same flag. Mentions Hermes. Not an order.
+ * Starts immediately. No score. Skip if DISCORD_WEBHOOK_URL is unset.
+ * Leo / couple-inbox stays dead.
+ */
+async function postDiscordFlag(env: Env, body: Record<string, unknown>): Promise<string> {
+  const hook = env.DISCORD_WEBHOOK_URL?.trim();
+  if (!hook) return "skipped_no_discord";
+  if (!isDiscordWebhook(hook)) return "skipped_bad_webhook";
+  const msg = buildDiscordFlagMessage(wakeEnvelope(body), env.HERMES_DISCORD_USER_ID);
+  try {
+    let res: Response;
+    if (msg.file_body) {
+      const form = new FormData();
+      form.append(
+        "payload_json",
+        JSON.stringify({ content: msg.content, allowed_mentions: msg.allowed_mentions })
+      );
+      form.append("files[0]", new Blob([msg.file_body], { type: "application/json" }), "flag.json");
+      res = await fetch(hook, { method: "POST", body: form });
+    } else {
+      res = await fetch(hook, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ content: msg.content, allowed_mentions: msg.allowed_mentions }),
+      });
+    }
+    return `discord:${res.status}`;
+  } catch (e) {
+    return `discord_error:${redactUrl(e instanceof Error ? e.message : String(e))}`;
+  }
+}
+
+/** Start URL wake and Discord together. Callers await after the sends are already in flight. */
+function startFlagDelivery(
+  env: Env,
+  flag: Record<string, unknown>,
+  opts?: { wake?: boolean }
+): { wake: Promise<string>; discord: Promise<string> } {
+  return {
+    wake: opts?.wake === false ? Promise.resolve("skipped_not_requested") : postDeskWake(env, flag),
+    discord: postDiscordFlag(env, flag),
+  };
 }
 
 async function fetchTicker(product: string): Promise<{ ok: true; ticker: Ticker } | { ok: false; error: string; status?: number }> {
@@ -582,44 +657,44 @@ async function runWatch(
       alertId = inserted.alertId;
       deduped = inserted.deduped;
       if (alertId != null) {
-        const delivered = reasons.some((r) => r.kind === "pulse_stale")
-          ? postDeskWake(
-              env,
-              buildPulseStaleHermesFlag({
-                ts,
-                check_id: ins?.id,
-                alert_id: alertId,
-                check_source: source,
-                drift: drifted,
-                drift_pct_threshold: driftPct,
-                tickers: payload.tickers,
-                last_mids: lastMids,
-                fetch_errors,
-                reasons,
-                book_mark_usd: bookMarkUsd,
-                soft_cap_usd: policy.soft_cap_usd,
-                util_pct: payload.util_pct,
-                last_pulse_ts: lastPulseTs,
-                pulse_age_minutes: pulseFreshness.pulse_age_minutes,
-                pulse_stale: pulseFreshness.pulse_stale,
-                pulse_stale_minutes: policy.pulse_stale_minutes,
-                never_pulsed: pulseFreshness.never_pulsed,
-                last_ok_check_ts: lastOkTs,
-                last_ok_age_minutes,
-                fetch_ok: fetchOk,
-                partial_ok: partialOk,
-                hard_fetch_fail: hardFetchFail,
-                transient_only: transientOnly,
-                price_moves,
-                policy_snapshot: payload.policy_snapshot,
-              })
-            )
-          : null;
+        const delivery = startFlagDelivery(
+          env,
+          buildPulseStaleHermesFlag({
+            ts,
+            check_id: ins?.id,
+            alert_id: alertId,
+            check_source: source,
+            drift: drifted,
+            drift_pct_threshold: driftPct,
+            tickers: payload.tickers,
+            last_mids: lastMids,
+            fetch_errors,
+            reasons,
+            book_mark_usd: bookMarkUsd,
+            soft_cap_usd: policy.soft_cap_usd,
+            util_pct: payload.util_pct,
+            last_pulse_ts: lastPulseTs,
+            pulse_age_minutes: pulseFreshness.pulse_age_minutes,
+            pulse_stale: pulseFreshness.pulse_stale,
+            pulse_stale_minutes: policy.pulse_stale_minutes,
+            never_pulsed: pulseFreshness.never_pulsed,
+            last_ok_check_ts: lastOkTs,
+            last_ok_age_minutes,
+            fetch_ok: fetchOk,
+            partial_ok: partialOk,
+            hard_fetch_fail: hardFetchFail,
+            transient_only: transientOnly,
+            price_moves,
+            policy_snapshot: payload.policy_snapshot,
+            alert_kind: reasons.some((r) => r.kind === "pulse_stale") ? "pulse_stale" : kind,
+          }),
+          { wake: reasons.some((r) => r.kind === "pulse_stale") }
+        );
         await stateSet(db, "alert_cooldown_until", until);
         await stateSet(db, "last_alert_ts", ts);
-        if (delivered) await delivered;
+        await Promise.all([delivery.wake, delivery.discord]);
       }
-      // Leo bridge DEAD — skip chat wake; alert stored in D1 only
+      // Leo bridge stays dead. Discord is the Hermes mention only.
     }
   }
 
@@ -987,6 +1062,7 @@ async function ingestBookPulse(
   ts: string;
   as_of: string;
   wake?: string;
+  discord?: string;
 }> {
   await migrate(env);
   const db = requireDb(env);
@@ -1055,6 +1131,7 @@ async function ingestBookPulse(
   let deduped = false;
   let silenced = false;
   let wake: string | undefined;
+  let discord: string | undefined;
 
   const dists = wreckDistances(pulse.book_mark_usd, pulse.wreck_pause_usd, pulse.wreck_kill_usd);
   const flagUtil =
@@ -1147,7 +1224,7 @@ async function ingestBookPulse(
       alertId = inserted.alertId;
       deduped = inserted.deduped;
       if (alertId != null) {
-        const delivered = postDeskWake(
+        const delivery = startFlagDelivery(
           env,
           buildBookPulseHermesFlag({
             kind: `book_pulse:${kind}`,
@@ -1157,7 +1234,7 @@ async function ingestBookPulse(
         );
         await stateSet(db, "alert_cooldown_until", until);
         await stateSet(db, "last_alert_ts", ts);
-        wake = await delivered;
+        [wake, discord] = await Promise.all([delivery.wake, delivery.discord]);
       }
     }
   }
@@ -1193,7 +1270,7 @@ async function ingestBookPulse(
       if (inserted.alertId != null) {
         alertId = inserted.alertId;
         deduped = inserted.deduped;
-        const delivered = postDeskWake(
+        const delivery = startFlagDelivery(
           env,
           buildBookPulseHermesFlag({
             kind: `book_pulse:${kind}`,
@@ -1203,7 +1280,7 @@ async function ingestBookPulse(
         );
         await stateSet(db, "alert_cooldown_until", until);
         await stateSet(db, "last_alert_ts", ts);
-        wake = await delivered;
+        [wake, discord] = await Promise.all([delivery.wake, delivery.discord]);
       } else if (alertId == null) {
         deduped = inserted.deduped;
       }
@@ -1245,6 +1322,7 @@ async function ingestBookPulse(
     ts,
     as_of: asOfIso,
     wake,
+    discord,
   };
 }
 
@@ -1475,6 +1553,7 @@ async function ingestPredictClip(
   deduped?: boolean;
   silenced?: boolean;
   wake?: string;
+  discord?: string;
   r2?: string;
   checkId?: number;
   ts: string;
@@ -1549,7 +1628,9 @@ async function ingestPredictClip(
   let deduped = false;
   let silenced = false;
   let wake = "skipped_no_url";
+  let discord = "skipped_no_discord";
   let wakeDelivery: Promise<string> | null = null;
+  let discordDelivery: Promise<string> | null = null;
 
   if (should) {
     if (policy.alerts_enabled !== 1) {
@@ -1616,7 +1697,7 @@ async function ingestPredictClip(
             .first<{ id: number }>();
           alertId = a?.id ?? null;
           if (alertId != null) {
-            wakeDelivery = postDeskWake(
+            const delivery = startFlagDelivery(
               env,
               buildPredictCashOutHermesFlag({
                 ts,
@@ -1640,6 +1721,8 @@ async function ingestPredictClip(
                 meets_cash_out_floor: cashOut.meets_cash_out_floor,
               })
             );
+            wakeDelivery = delivery.wake;
+            discordDelivery = delivery.discord;
             await stateSet(db, "cash_out_alert_fired", "1");
             await stateSet(db, "cash_out_alert_armed", "0");
             await stateSet(db, "last_alert_ts", ts);
@@ -1658,7 +1741,10 @@ async function ingestPredictClip(
         }
       }
 
-      if (wakeDelivery) wake = await wakeDelivery;
+      [wake, discord] = await Promise.all([
+        wakeDelivery ?? Promise.resolve(wake),
+        discordDelivery ?? Promise.resolve(discord),
+      ]);
     }
   }
 
@@ -1698,6 +1784,7 @@ async function ingestPredictClip(
     deduped,
     silenced,
     wake,
+    discord,
     r2: r2status,
     checkId: ins?.id,
     ts,

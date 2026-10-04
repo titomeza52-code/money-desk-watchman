@@ -6,7 +6,8 @@ Cloudflare Worker edge watchman for Money Desk soft-cap **observation**.
 - NEVER place / cancel / modify orders.
 - NEVER HMAC Coinbase from the Worker. No trading keys on CF.
 - Public Coinbase market data for tape drift; **Desk pushes** book pulse (keys stay on box/Desk).
-- Leo / couple-inbox bridge is **DEAD** — do not wake chat; alerts stay in D1 (+ R2 artifacts).
+- Leo / couple-inbox bridge is **DEAD** — do not wake that chat.
+- A raised flag also posts to Discord when secret `DISCORD_WEBHOOK_URL` is set. The message mentions Hermes and carries the full computed flag. It is not an order. The webhook is not in the repo. Optional var `HERMES_DISCORD_USER_ID` (Hermes bot snowflake, not a token) turns `@Hermes` into a real bot mention. Create the webhook in Hermes Coordination `#trading-mission`. There is no channel-id binding, so the channel id is not stored in the worker.
 
 ## Stack
 - Wrangler Worker (TypeScript): `money-desk-watchman` (v1.6.7 as_of reject + /health wake contract + pulse_stale observe)
@@ -14,6 +15,7 @@ Cloudflare Worker edge watchman for Money Desk soft-cap **observation**.
 - R2: `ego-artifacts` (binding `ARTIFACTS`) — structured pulses + fill receipts
 - Crons (UTC): `*/15 * * * *` watch; `15 10 * * *` night-school; `0 10 * * SUN` dreaming (CF Quartz: use SUN not 0)
 - Secret: `ADMIN_TOKEN` (wrangler secret + local `.dev.vars` mode 600)
+- Secret (optional, not committed): `DISCORD_WEBHOOK_URL` — `npx wrangler secret put DISCORD_WEBHOOK_URL`
 - Vars: `DRIFT_PCT`, `WORKER_NAME`, `BOOK_MARK_USD` (default 130 soft-cap proxy)
 
 ## Routes
