@@ -5,6 +5,12 @@
  */
 
 import {
+  buildBookPulseHermesFlag,
+  buildPredictCashOutHermesFlag,
+  buildPulseStaleHermesFlag,
+  wreckDistances,
+} from "./hermes-flag";
+import {
   PULSE_STALE_MINUTES_DEFAULT,
   deskFeederWakeContract,
   evaluatePulseAsOf,
@@ -181,7 +187,11 @@ async function setLastError(db: D1Database, msg: string | null): Promise<void> {
   }
 }
 
-/** Optional Desk wake — POST only if COINBASE_WAKE_URL set; never HMAC; skip if absent. */
+/**
+ * Deliver an already-built observe-only flag to Hermes (COINBASE_WAKE_URL).
+ * The body is sent as-is. No retry, no response parse, no enrichment.
+ * Skip if URL absent. Never HMAC. Never an order.
+ */
 async function postDeskWake(env: Env, body: Record<string, unknown>): Promise<string> {
   if (!env.COINBASE_WAKE_URL) return "skipped_no_url";
   try {
@@ -377,15 +387,19 @@ async function runWatch(
 
   // Stale-check detector (NOT real open-order stale — that needs READ-ONLY Coinbase key, parked)
   const lastOkTs = await stateGet(db, "last_ok_check_ts");
+  let last_ok_age_minutes: number | null = null;
   if (lastOkTs) {
     const ageMs = Date.now() - Date.parse(lastOkTs);
     const staleMs = policy.stale_order_minutes * 60_000;
-    if (Number.isFinite(ageMs) && ageMs > staleMs) {
-      const ageMin = (ageMs / 60_000).toFixed(1);
-      reasons.push({
-        kind: "stale_watch",
-        detail: `last successful check ${ageMin}m ago > policy.stale_order_minutes=${policy.stale_order_minutes} (watchman outage gap; not open-order stale)`,
-      });
+    if (Number.isFinite(ageMs)) {
+      last_ok_age_minutes = Number((ageMs / 60_000).toFixed(2));
+      if (ageMs > staleMs) {
+        const ageMin = (ageMs / 60_000).toFixed(1);
+        reasons.push({
+          kind: "stale_watch",
+          detail: `last successful check ${ageMin}m ago > policy.stale_order_minutes=${policy.stale_order_minutes} (watchman outage gap; not open-order stale)`,
+        });
+      }
     }
   }
 
@@ -414,14 +428,18 @@ async function runWatch(
   const hardFetchFail = fetch_errors.some((e) => e.transient === false);
   const transientOnly = fetch_errors.length > 0 && !hardFetchFail;
   const partialOk = tickers.length > 0;
+  const price_moves: { product: string; last: number; now: number; pct: number; above_threshold: boolean }[] = [];
 
-  // Compare mids for products present in both lastMids and current mids (partial OK)
+  // Compare mids for products present in both lastMids and current mids (partial OK).
+  // Keep every compared move, including those under the drift threshold. Same loop; no second pass.
   if (partialOk) {
     for (const [product, mid] of Object.entries(mids)) {
       const last = lastMids[product];
       if (typeof last === "number" && last > 0) {
         const pct = Math.abs((mid - last) / last) * 100;
-        if (pct > driftPct) {
+        const above = pct > driftPct;
+        price_moves.push({ product, last, now: mid, pct, above_threshold: above });
+        if (above) {
           reasons.push({
             kind: "price_move",
             detail: `${product} mid moved ${pct.toFixed(2)}% (threshold ${driftPct}%)`,
@@ -462,6 +480,7 @@ async function runWatch(
     util_pct: Number(util.toFixed(2)),
     policy_snapshot: {
       soft_cap_usd: policy.soft_cap_usd,
+      max_open_orders: policy.max_open_orders,
       alerts_enabled: policy.alerts_enabled,
       alert_cooldown_minutes: policy.alert_cooldown_minutes,
       stale_order_minutes: policy.stale_order_minutes,
@@ -563,18 +582,42 @@ async function runWatch(
       alertId = inserted.alertId;
       deduped = inserted.deduped;
       if (alertId != null) {
+        const delivered = reasons.some((r) => r.kind === "pulse_stale")
+          ? postDeskWake(
+              env,
+              buildPulseStaleHermesFlag({
+                ts,
+                check_id: ins?.id,
+                alert_id: alertId,
+                check_source: source,
+                drift: drifted,
+                drift_pct_threshold: driftPct,
+                tickers: payload.tickers,
+                last_mids: lastMids,
+                fetch_errors,
+                reasons,
+                book_mark_usd: bookMarkUsd,
+                soft_cap_usd: policy.soft_cap_usd,
+                util_pct: payload.util_pct,
+                last_pulse_ts: lastPulseTs,
+                pulse_age_minutes: pulseFreshness.pulse_age_minutes,
+                pulse_stale: pulseFreshness.pulse_stale,
+                pulse_stale_minutes: policy.pulse_stale_minutes,
+                never_pulsed: pulseFreshness.never_pulsed,
+                last_ok_check_ts: lastOkTs,
+                last_ok_age_minutes,
+                fetch_ok: fetchOk,
+                partial_ok: partialOk,
+                hard_fetch_fail: hardFetchFail,
+                transient_only: transientOnly,
+                price_moves,
+                policy_snapshot: payload.policy_snapshot,
+              })
+            )
+          : null;
         await stateSet(db, "alert_cooldown_until", until);
         await stateSet(db, "last_alert_ts", ts);
-        if (reasons.some((r) => r.kind === "pulse_stale")) {
-          await postDeskWake(env, {
-            kind: "pulse_stale",
-            last_pulse_ts: lastPulseTs,
-            pulse_age_minutes: pulseFreshness.pulse_age_minutes,
-            pulse_stale_minutes: policy.pulse_stale_minutes,
-            ts,
-            note: "observe-only wake; feeder dead; POST /admin/book-pulse; no HMAC; no orders",
-          });
-        }
+        if (delivered) await delivered;
       }
       // Leo bridge DEAD — skip chat wake; alert stored in D1 only
     }
@@ -930,7 +973,8 @@ function sanitizeFillReceipt(value: unknown, depth = 0): unknown {
 async function ingestBookPulse(
   env: Env,
   pulse: BookPulse,
-  asOfIso: string
+  asOfIso: string,
+  snapshotAgeMinutes: number
 ): Promise<{
   ok: boolean;
   checkId?: number;
@@ -942,6 +986,7 @@ async function ingestBookPulse(
   pulse: BookPulse;
   ts: string;
   as_of: string;
+  wake?: string;
 }> {
   await migrate(env);
   const db = requireDb(env);
@@ -994,38 +1039,53 @@ async function ingestBookPulse(
     .bind(ts, JSON.stringify(payload))
     .first<{ id: number }>();
 
-  let r2status = "parked_unbound";
-  if (env.ARTIFACTS) {
-    const day = ts.slice(0, 10);
-    const hhmm = ts.slice(11, 16).replace(":", "");
-    const key = `pulses/${day}/${hhmm}.json`;
-    try {
-      await env.ARTIFACTS.put(key, JSON.stringify(payload, null, 2), {
-        httpMetadata: { contentType: "application/json" },
-      });
-      await db
-        .prepare(`INSERT INTO artifacts_index (ts, r2_key, kind, notes) VALUES (?, ?, 'book_pulse', 'written')`)
-        .bind(ts, key)
-        .run();
-      r2status = `ok:${key}`;
-    } catch (e) {
-      r2status = `parked_error:${e instanceof Error ? e.message : String(e)}`;
-      await db
-        .prepare(`INSERT INTO artifacts_index (ts, r2_key, kind, notes) VALUES (?, NULL, 'book_pulse', ?)`)
-        .bind(ts, r2status)
-        .run();
-    }
-  }
-
-  // Alert: mark ≤118 OR sleeve ≤ -4
+  // Alert: mark ≤118 OR sleeve ≤ -4. Flag leaves before the R2 copy.
   const markHit =
     pulse.book_mark_usd != null && pulse.book_mark_usd <= BOOK_PULSE_MARK_ALERT_USD;
   const sleeveHit =
     pulse.predict_sleeve_net != null && pulse.predict_sleeve_net <= BOOK_PULSE_SLEEVE_ALERT;
+  const dryIdleHit =
+    pulse.morpho_convert_blocked !== true &&
+    pulse.dry_usd != null &&
+    pulse.morpho_usd != null &&
+    pulse.dry_usd >= BOOK_PULSE_DRY_IDLE_USD &&
+    pulse.morpho_usd > 0;
 
   let alertId: number | null = null;
   let deduped = false;
   let silenced = false;
+  let wake: string | undefined;
+
+  const dists = wreckDistances(pulse.book_mark_usd, pulse.wreck_pause_usd, pulse.wreck_kill_usd);
+  const flagUtil =
+    pulse.soft_cap_util_pct != null
+      ? pulse.soft_cap_util_pct
+      : pulse.book_mark_usd != null
+        ? Number(utilPct(pulse.book_mark_usd, policy.soft_cap_usd).toFixed(1))
+        : null;
+  const bookFlagBase = {
+    ts,
+    as_of: asOfIso,
+    pulse_age_minutes: snapshotAgeMinutes,
+    check_id: ins?.id,
+    book_mark_usd: pulse.book_mark_usd,
+    wreck_pause_usd: pulse.wreck_pause_usd,
+    wreck_kill_usd: pulse.wreck_kill_usd,
+    distance_to_wreck_pause_usd: dists.distance_to_wreck_pause_usd,
+    distance_to_wreck_kill_usd: dists.distance_to_wreck_kill_usd,
+    open_order_count: pulse.open_order_count,
+    morpho_usd: pulse.morpho_usd,
+    dry_usd: pulse.dry_usd,
+    predict_sleeve_net: pulse.predict_sleeve_net,
+    soft_cap_util_pct: pulse.soft_cap_util_pct,
+    soft_cap_flag: softCapFlag,
+    soft_cap_usd: policy.soft_cap_usd,
+    morpho_convert_blocked: pulse.morpho_convert_blocked,
+    util_pct: flagUtil,
+    mark_hit: markHit,
+    sleeve_hit: sleeveHit,
+    dry_idle_hit: dryIdleHit,
+  };
 
   if (markHit || sleeveHit) {
     if (policy.alerts_enabled !== 1) {
@@ -1039,10 +1099,8 @@ async function ingestBookPulse(
       const mark = pulse.book_mark_usd;
       const pause = pulse.wreck_pause_usd;
       const kill = pulse.wreck_kill_usd;
-      const distPause =
-        mark != null && Number.isFinite(mark) ? Number((mark - pause).toFixed(2)) : null;
-      const distKill =
-        mark != null && Number.isFinite(mark) ? Number((mark - kill).toFixed(2)) : null;
+      const distPause = dists.distance_to_wreck_pause_usd;
+      const distKill = dists.distance_to_wreck_kill_usd;
 
       const lines: string[] = [
         "Money Desk Watchman — BOOK PULSE ALERT (observe-only)",
@@ -1089,21 +1147,23 @@ async function ingestBookPulse(
       alertId = inserted.alertId;
       deduped = inserted.deduped;
       if (alertId != null) {
+        const delivered = postDeskWake(
+          env,
+          buildBookPulseHermesFlag({
+            kind: `book_pulse:${kind}`,
+            alert_id: alertId,
+            ...bookFlagBase,
+          })
+        );
         await stateSet(db, "alert_cooldown_until", until);
         await stateSet(db, "last_alert_ts", ts);
+        wake = await delivered;
       }
     }
   }
 
   // Alert: dry cash idle while Morpho has balance (observe-only idle leak).
   // Skip when Morpho convert is known-blocked (dry USD silo) — still store dry/morpho above.
-  const dryIdleHit =
-    pulse.morpho_convert_blocked !== true &&
-    pulse.dry_usd != null &&
-    pulse.morpho_usd != null &&
-    pulse.dry_usd >= BOOK_PULSE_DRY_IDLE_USD &&
-    pulse.morpho_usd > 0;
-
   if (dryIdleHit) {
     if (policy.alerts_enabled !== 1) {
       silenced = true;
@@ -1133,11 +1193,43 @@ async function ingestBookPulse(
       if (inserted.alertId != null) {
         alertId = inserted.alertId;
         deduped = inserted.deduped;
+        const delivered = postDeskWake(
+          env,
+          buildBookPulseHermesFlag({
+            kind: `book_pulse:${kind}`,
+            alert_id: inserted.alertId,
+            ...bookFlagBase,
+          })
+        );
         await stateSet(db, "alert_cooldown_until", until);
         await stateSet(db, "last_alert_ts", ts);
+        wake = await delivered;
       } else if (alertId == null) {
         deduped = inserted.deduped;
       }
+    }
+  }
+
+  let r2status = "parked_unbound";
+  if (env.ARTIFACTS) {
+    const day = ts.slice(0, 10);
+    const hhmm = ts.slice(11, 16).replace(":", "");
+    const key = `pulses/${day}/${hhmm}.json`;
+    try {
+      await env.ARTIFACTS.put(key, JSON.stringify(payload, null, 2), {
+        httpMetadata: { contentType: "application/json" },
+      });
+      await db
+        .prepare(`INSERT INTO artifacts_index (ts, r2_key, kind, notes) VALUES (?, ?, 'book_pulse', 'written')`)
+        .bind(ts, key)
+        .run();
+      r2status = `ok:${key}`;
+    } catch (e) {
+      r2status = `parked_error:${e instanceof Error ? e.message : String(e)}`;
+      await db
+        .prepare(`INSERT INTO artifacts_index (ts, r2_key, kind, notes) VALUES (?, NULL, 'book_pulse', ?)`)
+        .bind(ts, r2status)
+        .run();
     }
   }
 
@@ -1152,6 +1244,7 @@ async function ingestBookPulse(
     pulse: { ...pulse, as_of: asOfIso },
     ts,
     as_of: asOfIso,
+    wake,
   };
 }
 
@@ -1224,10 +1317,27 @@ function computeMarkUp(clip: PredictClip): number {
   return clip.mark_now * clip.contracts - clip.cost_all_in;
 }
 
-function cashOutShouldAlert(clip: PredictClip, markUp: number): boolean {
-  const maxProfit = clip.max_payout - clip.cost_all_in;
-  const thresh = CASH_OUT_MARK_FRAC * maxProfit;
-  return markUp >= thresh && markUp >= CASH_OUT_MARK_FLOOR;
+function cashOutCriteria(
+  clip: PredictClip,
+  markUp: number
+): {
+  max_profit: number;
+  cash_out_threshold: number;
+  meets_cash_out_frac: boolean;
+  meets_cash_out_floor: boolean;
+  should_alert: boolean;
+} {
+  const max_profit = clip.max_payout - clip.cost_all_in;
+  const cash_out_threshold = CASH_OUT_MARK_FRAC * max_profit;
+  const meets_cash_out_frac = markUp >= cash_out_threshold;
+  const meets_cash_out_floor = markUp >= CASH_OUT_MARK_FLOOR;
+  return {
+    max_profit,
+    cash_out_threshold,
+    meets_cash_out_frac,
+    meets_cash_out_floor,
+    should_alert: meets_cash_out_frac && meets_cash_out_floor,
+  };
 }
 
 function parsePredictClipBody(
@@ -1390,7 +1500,8 @@ async function ingestPredictClip(
   }
 
   const mark_up = Number(computeMarkUp(clip).toFixed(6));
-  const should = cashOutShouldAlert(clip, mark_up);
+  const cashOut = cashOutCriteria(clip, mark_up);
+  const should = cashOut.should_alert;
 
   await stateSet(db, "predict_clip_json", JSON.stringify(clip));
   await stateSet(db, "predict_clip_open", "1");
@@ -1434,33 +1545,11 @@ async function ingestPredictClip(
     .bind(ts, JSON.stringify(payload))
     .first<{ id: number }>();
 
-  let r2status = "parked_unbound";
-  if (env.ARTIFACTS) {
-    const day = ts.slice(0, 10);
-    const hhmm = ts.slice(11, 16).replace(":", "");
-    const key = `predicts/${day}/${hhmm}.json`;
-    try {
-      await env.ARTIFACTS.put(key, JSON.stringify(payload, null, 2), {
-        httpMetadata: { contentType: "application/json" },
-      });
-      await db
-        .prepare(`INSERT INTO artifacts_index (ts, r2_key, kind, notes) VALUES (?, ?, 'predict_clip', 'written')`)
-        .bind(ts, key)
-        .run();
-      r2status = `ok:${key}`;
-    } catch (e) {
-      r2status = `parked_error:${e instanceof Error ? e.message : String(e)}`;
-      await db
-        .prepare(`INSERT INTO artifacts_index (ts, r2_key, kind, notes) VALUES (?, NULL, 'predict_clip', ?)`)
-        .bind(ts, r2status)
-        .run();
-    }
-  }
-
   let alertId: number | null = null;
   let deduped = false;
   let silenced = false;
   let wake = "skipped_no_url";
+  let wakeDelivery: Promise<string> | null = null;
 
   if (should) {
     if (policy.alerts_enabled !== 1) {
@@ -1468,8 +1557,8 @@ async function ingestPredictClip(
     } else if (fired) {
       deduped = true;
     } else {
-      const maxProfit = clip.max_payout - clip.cost_all_in;
-      const thresh = CASH_OUT_MARK_FRAC * maxProfit;
+      const maxProfit = cashOut.max_profit;
+      const thresh = cashOut.cash_out_threshold;
       const lines: string[] = [
         "Money Desk Watchman — PREDICT CASH-OUT OBSERVE ALERT",
         `When: ${ts}`,
@@ -1527,6 +1616,30 @@ async function ingestPredictClip(
             .first<{ id: number }>();
           alertId = a?.id ?? null;
           if (alertId != null) {
+            wakeDelivery = postDeskWake(
+              env,
+              buildPredictCashOutHermesFlag({
+                ts,
+                check_id: ins?.id,
+                alert_id: alertId,
+                market_id: clip.market_id,
+                side: clip.side,
+                contracts: clip.contracts,
+                cost_all_in: clip.cost_all_in,
+                max_payout: clip.max_payout,
+                mark_now: clip.mark_now,
+                expiry_ts: clip.expiry_ts,
+                fee_exit_est: clip.fee_exit_est,
+                mark_up,
+                max_profit: maxProfit,
+                cash_out_threshold: thresh,
+                cash_out_threshold_frac: CASH_OUT_MARK_FRAC,
+                cash_out_floor: CASH_OUT_MARK_FLOOR,
+                should_alert: should,
+                meets_cash_out_frac: cashOut.meets_cash_out_frac,
+                meets_cash_out_floor: cashOut.meets_cash_out_floor,
+              })
+            );
             await stateSet(db, "cash_out_alert_fired", "1");
             await stateSet(db, "cash_out_alert_armed", "0");
             await stateSet(db, "last_alert_ts", ts);
@@ -1545,22 +1658,35 @@ async function ingestPredictClip(
         }
       }
 
-      // Optional wake — skip if COINBASE_WAKE_URL absent; never HMAC
-      if (alertId != null) {
-        wake = await postDeskWake(env, {
-          kind: "predict_cash_out",
-          market_id: clip.market_id,
-          side: clip.side,
-          mark_up,
-          ts,
-          note: "observe-only wake; no HMAC; no orders",
-        });
-      }
+      if (wakeDelivery) wake = await wakeDelivery;
     }
   }
 
   const cash_out_alert_armed = !fired;
   await stateSet(db, "cash_out_alert_armed", cash_out_alert_armed ? "1" : "0");
+
+  let r2status = "parked_unbound";
+  if (env.ARTIFACTS) {
+    const day = ts.slice(0, 10);
+    const hhmm = ts.slice(11, 16).replace(":", "");
+    const key = `predicts/${day}/${hhmm}.json`;
+    try {
+      await env.ARTIFACTS.put(key, JSON.stringify(payload, null, 2), {
+        httpMetadata: { contentType: "application/json" },
+      });
+      await db
+        .prepare(`INSERT INTO artifacts_index (ts, r2_key, kind, notes) VALUES (?, ?, 'predict_clip', 'written')`)
+        .bind(ts, key)
+        .run();
+      r2status = `ok:${key}`;
+    } catch (e) {
+      r2status = `parked_error:${e instanceof Error ? e.message : String(e)}`;
+      await db
+        .prepare(`INSERT INTO artifacts_index (ts, r2_key, kind, notes) VALUES (?, NULL, 'predict_clip', ?)`)
+        .bind(ts, r2status)
+        .run();
+    }
+  }
 
   return {
     ok: true,
@@ -2022,7 +2148,7 @@ export default {
             { status: asOf.status }
           );
         }
-        const result = await ingestBookPulse(env, parsed.pulse, asOf.asOfIso);
+        const result = await ingestBookPulse(env, parsed.pulse, asOf.asOfIso, asOf.ageMinutes);
         return Response.json({ ok: true, result });
       } catch (e) {
         return Response.json(

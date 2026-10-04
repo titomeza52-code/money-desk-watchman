@@ -52,8 +52,8 @@ Cloudflare Worker edge watchman for Money Desk soft-cap **observation**.
 - Defaults: `wreck_pause_usd=113`, `wreck_kill_usd=92` when omitted.
 - Stores latest in D1 `state` + `checks` row `source=book_pulse`.
 - When ARTIFACTS bound: R2 `pulses/YYYY-MM-DD/HHMM.json`.
-- Alert (dedup+cooldown) if `book_mark_usd ≤ 118` OR `predict_sleeve_net ≤ -4` — human action only, no executable orders.
-- Alert (dedup+cooldown) `morpho_dry_idle` if `dry_usd ≥ 5` AND `morpho_usd > 0` — observe-only idle leak (park dry→Morpho when convert works); **muted** when pulse/overlay `morpho_convert_blocked` is true (BLOCKED_CONVERT / dry USD silo); no orders from Worker.
+- Alert (dedup+cooldown) if `book_mark_usd ≤ 118` OR `predict_sleeve_net ≤ -4` — human action only, no executable orders. On insert, POST `COINBASE_WAKE_URL` (skip if unset) with the full computed book flag: `book_mark_usd`, `wreck_pause_usd`, `wreck_kill_usd`, `distance_to_wreck_pause_usd`, `distance_to_wreck_kill_usd`, `pulse_age_minutes` (snapshot age of `as_of`), sleeve/dry/morpho, `soft_cap_flag`, `mark_hit`, `sleeve_hit`, `dry_idle_hit`, `check_id`, `alert_id`. Same immediate delivery as the watch flag. No score and no near-miss pass.
+- Alert (dedup+cooldown) `morpho_dry_idle` if `dry_usd ≥ 5` AND `morpho_usd > 0` — observe-only idle leak (park dry→Morpho when convert works); **muted** when pulse/overlay `morpho_convert_blocked` is true (BLOCKED_CONVERT / dry USD silo); no orders from Worker. On insert, the same full book flag is posted (`kind=book_pulse:morpho_dry_idle`).
 - If `soft_cap_util_pct > 25` → D1 `soft_cap_flag=1` (else 0 when util provided).
 
 
@@ -72,7 +72,7 @@ Cloudflare Worker edge watchman for Money Desk soft-cap **observation**.
 ```
 - Clear: `{"clear":true}` (also auto-clears on expiry).
 - Alert once when mark_up ≥ 0.70×(max_payout−cost) AND ≥ 0.50; dedup until clear.
-- R2: `predicts/YYYY-MM-DD/…`. Wake only if env `COINBASE_WAKE_URL` set.
+- R2: `predicts/YYYY-MM-DD/…`. Wake only if env `COINBASE_WAKE_URL` set. The body is the full computed clip: `market_id`, `side`, `contracts`, `cost_all_in`, `max_payout`, `mark_now`, `expiry_ts`, `fee_exit_est`, `mark_up`, `max_profit`, `cash_out_threshold`, `meets_cash_out_frac`, `meets_cash_out_floor`, `check_id`, `alert_id`.
 - Never HMAC / never orders from Worker.
 
 ## Box feeder (no keys in Worker)
@@ -91,7 +91,7 @@ python3 scripts/push-book-pulse.py
 ## Behavior (tape watch)
 1. Fetch Coinbase Exchange public tickers for BTC-USD + ETH-USD.
 2. Drift/alert if hard fetch fail, mid move > DRIFT_PCT, `stale_watch`, `pulse_stale` (last_pulse_ts set and older than `pulse_stale_minutes`; bootstrap null skips), or admin force. HTTP 429/5xx: check + `last_transient_error` only (no alert; `last_error` stays clean). Partial OK still refreshes `last_ok_check_ts` so sticky 429s do not fire `stale_watch`.
-3. Always insert checks. Alerts only if `alerts_enabled=1` and fingerprint not within cooldown. First `pulse_stale` alert also POSTs `COINBASE_WAKE_URL` when set (`kind=pulse_stale`); GET `/health` never wakes.
+3. Always insert checks. Alerts only if `alerts_enabled=1` and fingerprint not within cooldown. First `pulse_stale` alert also POSTs `COINBASE_WAKE_URL` when set. The body is the full computed watch flag (`kind=pulse_stale`): tickers (`product`, `price`, `bid`, `ask`, `mid`), drift `reasons` (`last`, `now`, `pct`), `book_mark_usd`, `util_pct`, `pulse_age_minutes`, `check_id`, `alert_id`. The POST is the delivery — no second verification, retry, score, or enrichment. Compared price moves stay on the flag even when they are under the drift threshold (`price_moves`). There is no near-miss field. GET `/health` never wakes.
 4. Night-school / Dreaming unchanged (D1 lessons SoT; R2 optional md).
 
 ## /health wake contract (Desk pull)

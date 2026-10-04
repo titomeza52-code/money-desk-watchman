@@ -6,7 +6,7 @@
   "scripts": {
     "deploy": "wrangler deploy",
     "dev": "wrangler dev",
-    "test": "node --experimental-strip-types --test src/pulse-contract.test.ts",
+    "test": "node --experimental-strip-types --test src/pulse-contract.test.ts src/hermes-flag.test.ts",
     "cf-typegen": "wrangler types"
   },
   "devDependencies": {
