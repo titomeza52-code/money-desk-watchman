@@ -52,3 +52,15 @@ CREATE TABLE IF NOT EXISTS state (
 );
 
 CREATE UNIQUE INDEX IF NOT EXISTS alerts_dedup ON alerts(dedup_hash) WHERE dedup_hash IS NOT NULL;
+
+-- Flag push queue: rows waiting to be POSTed to the hermes-enricher.
+-- Upsert on (product, ts); drain retries flags whose next_retry_ts has passed.
+CREATE TABLE IF NOT EXISTS flag_queue (
+  ts TEXT NOT NULL,
+  product TEXT NOT NULL,
+  payload_json TEXT NOT NULL,
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  last_error TEXT,
+  next_retry_ts TEXT,
+  PRIMARY KEY (product, ts)
+);
