@@ -20,3 +20,5 @@ bucket_name = "ego-artifacts"
 DRIFT_PCT = "8"
 WORKER_NAME = "money-desk-watchman"
 BOOK_MARK_USD = "130"
+# Set via `npx wrangler secret put HERMES_ENRICHER_URL` (not a plain var) once
+# the hermes-enricher worker is deployed. Until then flags queue in D1.
